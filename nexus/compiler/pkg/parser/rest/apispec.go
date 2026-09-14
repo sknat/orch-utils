@@ -4,6 +4,7 @@
 package rest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/types"
 	"regexp"
@@ -27,7 +28,7 @@ func GetRestApiSpecs(p parser.Package, httpMethods map[string]nexus.HTTPMethodsR
 			uris := elt.(*ast.KeyValueExpr)
 
 			for _, uri := range uris.Value.(*ast.CompositeLit).Elts {
-				restUri := extractApiSpecRestURI(uri.(*ast.CompositeLit), httpMethods, httpCodes)
+				restUri := extractApiSpecRestURI(p, uri.(*ast.CompositeLit), httpMethods, httpCodes)
 				apiSpec.Uris = append(apiSpec.Uris, restUri)
 			}
 		}
@@ -38,7 +39,7 @@ func GetRestApiSpecs(p parser.Package, httpMethods map[string]nexus.HTTPMethodsR
 	return apiSpecs
 }
 
-func extractApiSpecRestURI(uri *ast.CompositeLit, httpMethods map[string]nexus.HTTPMethodsResponses, httpCodes map[string]nexus.HTTPCodesResponse) nexus.RestURIs {
+func extractApiSpecRestURI(p parser.Package, uri *ast.CompositeLit, httpMethods map[string]nexus.HTTPMethodsResponses, httpCodes map[string]nexus.HTTPCodesResponse) nexus.RestURIs {
 	restUri := nexus.RestURIs{}
 	for _, elt := range uri.Elts {
 		kv := elt.(*ast.KeyValueExpr)
@@ -51,7 +52,7 @@ func extractApiSpecRestURI(uri *ast.CompositeLit, httpMethods map[string]nexus.H
 			}
 			restUri.Uri = key
 		case "PathParams":
-			restUri.PathParams = extractApiSpecPathParams(kv)
+			restUri.PathParams = extractApiSpecPathParams(p, kv)
 		case "QueryParams":
 			restUri.QueryParams = extractApiSpecQueryParams(kv)
 		case "Headers":
@@ -67,7 +68,7 @@ func extractApiSpecRestURI(uri *ast.CompositeLit, httpMethods map[string]nexus.H
 // extractApiSpecPathParams parses a map[string]string literal where the key is
 // the URI path alias (e.g., "org") and the value is the canonical groupKind
 // (e.g., "orgs.Org").
-func extractApiSpecPathParams(kv *ast.KeyValueExpr) map[string]string {
+func extractApiSpecPathParams(p parser.Package, kv *ast.KeyValueExpr) map[string]string {
 	params := make(map[string]string)
 	val, ok := kv.Value.(*ast.CompositeLit)
 	if !ok {
@@ -93,7 +94,7 @@ func extractApiSpecPathParams(kv *ast.KeyValueExpr) map[string]string {
 		// validators (notably ExtensionRestAPIPathParams, which runs before
 		// ValidateRestApiSpec) can resolve aliases that don't follow the
 		// lowercase-Kind formula.
-		parser.RegisterPathParamAlias(alias, canonical)
+		parser.RegisterPathParamAlias(p.FullName, alias, canonical)
 	}
 	if len(params) == 0 {
 		return nil
@@ -159,7 +160,7 @@ func extractApiSpecHeaders(kv *ast.KeyValueExpr) []string {
 // things in different URIs.
 var aliasRegistry = map[string]string{}
 
-func ValidateRestApiSpec(apiSpec nexus.RestAPISpec, parentsMap map[string]parser.NodeHelper, crdName string) {
+func ValidateRestApiSpec(pkg parser.Package, apiSpec nexus.RestAPISpec, parentsMap map[string]parser.NodeHelper, crdName string) {
 	r := regexp.MustCompile(`{([^{}]+)}`)
 	crdHelper := parentsMap[crdName]
 
@@ -173,14 +174,15 @@ func ValidateRestApiSpec(apiSpec nexus.RestAPISpec, parentsMap map[string]parser
 
 		// Cross-URI consistency: every alias must map to the same canonical type wherever it appears.
 		for alias, canonical := range uri.PathParams {
-			if existing, ok := aliasRegistry[alias]; ok && existing != canonical {
+			key := fmt.Sprintf("%s/%s", pkg.FullName, alias)
+			if existing, ok := aliasRegistry[key]; ok && existing != canonical {
 				log.Fatalf("RestApiSpec: PathParams alias %q is inconsistent — maps to %q in URI %s but already mapped to %q in a previous URI", alias, canonical, uri.Uri, existing)
 			}
-			aliasRegistry[alias] = canonical
+			aliasRegistry[key] = canonical
 			// Publish to the parser-wide registry so downstream validators
 			// (notably ExtensionRestAPIPathParams) can resolve aliases that
 			// don't follow the lowercase-Kind formula.
-			parser.RegisterPathParamAlias(alias, canonical)
+			parser.RegisterPathParamAlias(pkg.FullName, alias, canonical)
 		}
 
 		// Build a [][]string of "resolved" URI params where each entry is the
@@ -254,7 +256,7 @@ func ValidateRestApiSpec(apiSpec nexus.RestAPISpec, parentsMap map[string]parser
 		// Check that all required parents are present in at least one location (URI, Header, or QueryParam)
 		// Resolve aliases in the URI first so ValidateRequiredParents sees canonical names.
 		resolvedUri := resolveUriString(uri.Uri, uri.PathParams)
-		missing, ignoredParents := parser.ValidateRequiredParents(resolvedUri, crdName, parentsMap, config.ConfigInstance.IgnoredParentPathParams)
+		missing, ignoredParents := parser.ValidateRequiredParents(pkg.FullName, resolvedUri, crdName, parentsMap, config.ConfigInstance.IgnoredParentPathParams)
 		for _, parentName := range ignoredParents {
 			if !headerExist(parentName, uri.Headers) && !queryParamExist(parentName, uri.QueryParams) {
 				log.Warnf("RestApiSpec: Provided parent name (%s) not found for uri: %s. Ignoring and proceeding, as it is configured as ignored parent path param", parentName, uri.Uri)

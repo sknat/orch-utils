@@ -52,8 +52,8 @@ cli.build.darwin:
 		--volume ${HOME}/.cache/go-build:/root/.cache/go-build \
 		-e GOCACHE=/root/.cache/go-build \
 		-w ${DOCKER_BUILD_MOUNT_DIR}/${CLI_DIR} \
-		golang:1.19.8 \
-		/bin/bash -c "git config --global --add safe.directory '*' && go mod download && make build.darwin";
+		golang:1.26.7 \
+		/bin/bash -c "(git config --global --add safe.directory '*' || true) && go mod download && make build.darwin";
 
 .PHONY: cli.build.linux
 cli.build.linux:
@@ -64,8 +64,8 @@ cli.build.linux:
 		-w ${DOCKER_BUILD_MOUNT_DIR}/${CLI_DIR} \
 		--volume ${HOME}/.cache/go-build:/root/.cache/go-build \
 		-e GOCACHE=/root/.cache/go-build \
-		golang:1.19.8 \
-		/bin/bash -c "git config --global --add safe.directory '*' && go mod download && make build.linux";
+		golang:1.26.7 \
+		/bin/bash -c "(git config --global --add safe.directory '*' || true) && go mod download && make build.linux";
 
 .PHONY: cli.build
 cli.build:

@@ -18,6 +18,7 @@ import (
 type ExtensionRestAPISpec struct {
 	Name            string   // Variable name
 	PkgName         string   // Package name
+	PkgFullName         string   // Package fullname
 	Uri             string   // URI path
 	Methods         []string // HTTP methods to proxy (e.g., ["GET", "PUT"]). Empty = all methods.
 	OpenAPIPathSpec string   // Raw OpenAPI path spec YAML
@@ -40,7 +41,7 @@ func ParseExtensionRestAPIs(pkgs Packages) []ExtensionRestAPISpec {
 func GetExtensionRestAPISpecs(p Package) []ExtensionRestAPISpec {
 	var specs []ExtensionRestAPISpec
 	for _, nexusSpec := range GetNexusSpecs(p, "nexus.ExtensionRestAPI") {
-		extSpec := parseExtensionRestAPI(nexusSpec.Value, nexusSpec.Name, p.Name)
+		extSpec := parseExtensionRestAPI(nexusSpec.Value, nexusSpec.Name, p.Name, p.FullName)
 		if err := ValidateExtensionRestAPI(extSpec); err != nil {
 			log.Fatalf("ExtensionRestAPI '%s' in package '%s': %v", nexusSpec.Name, p.Name, err)
 		}
@@ -50,10 +51,11 @@ func GetExtensionRestAPISpecs(p Package) []ExtensionRestAPISpec {
 }
 
 // parseExtensionRestAPI extracts fields from an ExtensionRestAPI composite literal.
-func parseExtensionRestAPI(v *ast.CompositeLit, varName, pkgName string) ExtensionRestAPISpec {
+func parseExtensionRestAPI(v *ast.CompositeLit, varName, pkgName, pkgFullName string) ExtensionRestAPISpec {
 	extSpec := ExtensionRestAPISpec{
 		Name:    varName,
 		PkgName: pkgName,
+		PkgFullName: pkgFullName,
 	}
 
 	for _, elt := range v.Elts {
@@ -235,11 +237,17 @@ func ValidateExtensionRestAPIPathParams(spec ExtensionRestAPISpec, parentsMap ma
 		// {datacenter} -> datacenters.DataCenters). ExtensionRestAPI URIs do
 		// not carry their own PathParams map, so they rely on aliases
 		// declared by the associated node's RestURIs.
-		if canonical := ResolvePathParamAlias(pathParam); canonical != "" && validNodes[canonical] {
+		if canonical := ResolvePathParamAlias(spec.PkgFullName, pathParam); canonical != "" && validNodes[canonical] {
 			continue
 		}
-		return fmt.Errorf("path param {%s} not found in hierarchy of node %s. Valid nodes: %v",
-			pathParam, spec.AssociatedNode, getValidNodesList(validNodes))
+		return fmt.Errorf("path param {%s} not found in hierarchy of node %s. "+
+			"scope:%s Valid nodes:%s aliases:%s",
+			pathParam,
+			spec.AssociatedNode,
+			spec.PkgFullName,
+			getValidNodesList(validNodes),
+			GetPathParamAliases(spec.PkgFullName),
+		)
 	}
 
 	// Reverse check: all required (non-singleton, non-ignored) parents must be in URI
@@ -247,7 +255,7 @@ func ValidateExtensionRestAPIPathParams(spec ExtensionRestAPISpec, parentsMap ma
 	if config.ConfigInstance != nil {
 		ignoredParams = config.ConfigInstance.IgnoredParentPathParams
 	}
-	missing, ignored := ValidateRequiredParents(spec.Uri, spec.NodeCRDName, parentsMap, ignoredParams)
+	missing, ignored := ValidateRequiredParents(spec.PkgFullName, spec.Uri, spec.NodeCRDName, parentsMap, ignoredParams)
 	for _, name := range ignored {
 		log.Warnf("ExtensionRestAPI '%s': parent %s not in URI %s, ignoring (configured as ignored parent path param)",
 			spec.Name, name, spec.Uri)
@@ -260,12 +268,12 @@ func ValidateExtensionRestAPIPathParams(spec ExtensionRestAPISpec, parentsMap ma
 }
 
 // getValidNodesList returns a sorted list of valid node names for error messages.
-func getValidNodesList(validNodes map[string]bool) []string {
+func getValidNodesList(validNodes map[string]bool) string {
 	var nodes []string
 	for node := range validNodes {
 		nodes = append(nodes, node)
 	}
-	return nodes
+	return fmt.Sprintf("[%s]", strings.Join(nodes, ","))
 }
 
 // ParseOpenAPIPathSpecToRestAPISpec parses OpenAPIPathSpec YAML and converts it
